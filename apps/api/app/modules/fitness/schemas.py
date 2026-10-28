@@ -25,7 +25,8 @@ class WorkoutCreate(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     performed_on: date = Field(default_factory=date.today)
     notes: str = Field(default="", max_length=2000)
-    exercises: list[WorkoutExerciseCreate] = Field(min_length=1, max_length=100)
+    creatine_taken: bool = False
+    exercises: list[WorkoutExerciseCreate] = Field(default_factory=list, max_length=100)
 
     @field_validator("title")
     @classmethod
@@ -39,6 +40,28 @@ class WorkoutCreate(BaseModel):
     @classmethod
     def normalize_notes(cls, value: str) -> str:
         return value.strip()
+
+
+class WorkoutUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    performed_on: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    creatine_taken: bool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        title = value.strip()
+        if not title:
+            raise ValueError("Workout title cannot be empty")
+        return title
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else value
 
 
 class WorkoutSetResponse(BaseModel):
@@ -60,6 +83,7 @@ class WorkoutResponse(BaseModel):
     title: str
     performed_on: date
     notes: str
+    creatine_taken: bool
     created_at: datetime
     updated_at: datetime
     exercises: list[WorkoutExerciseResponse]

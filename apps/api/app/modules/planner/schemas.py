@@ -52,6 +52,7 @@ class TaskResponse(BaseModel):
     title: str
     due_date: date
     priority: TaskPriority
+    base_priority: TaskPriority
     completed: bool
     created_at: datetime
     updated_at: datetime

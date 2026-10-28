@@ -1,7 +1,11 @@
 import sqlite3
 
 from app.database import Database
-from app.modules.fitness.schemas import WorkoutCreate
+from app.modules.fitness.schemas import WorkoutCreate, WorkoutUpdate
+
+
+class WorkoutDateConflictError(Exception):
+    pass
 
 
 class WorkoutRepository:
@@ -21,13 +25,24 @@ class WorkoutRepository:
 
     def create(self, workout: WorkoutCreate) -> dict[str, object]:
         with self.database.connect() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO fitness_workouts (title, performed_on, notes)
-                VALUES (?, ?, ?)
-                """,
-                (workout.title, workout.performed_on.isoformat(), workout.notes),
-            )
+            performed_on = workout.performed_on.isoformat()
+            if self._date_is_taken(connection, performed_on):
+                raise WorkoutDateConflictError
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO fitness_workouts (title, performed_on, notes, creatine_taken)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        workout.title,
+                        performed_on,
+                        workout.notes,
+                        int(workout.creatine_taken),
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise WorkoutDateConflictError from error
             workout_id = cursor.lastrowid
             if workout_id is None:
                 raise RuntimeError("Created workout does not have an id")
@@ -55,6 +70,77 @@ class WorkoutRepository:
                 )
 
             return self._load(connection, workout_id)
+
+    def update(
+        self,
+        workout_id: int,
+        update: WorkoutUpdate,
+    ) -> dict[str, object] | None:
+        with self.database.connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM fitness_workouts WHERE id = ?", (workout_id,)
+            ).fetchone()
+            if existing is None:
+                return None
+
+            performed_on = (
+                update.performed_on.isoformat()
+                if update.performed_on is not None
+                else existing["performed_on"]
+            )
+            if self._date_is_taken(connection, performed_on, excluding_id=workout_id):
+                raise WorkoutDateConflictError
+
+            try:
+                connection.execute(
+                    """
+                    UPDATE fitness_workouts
+                    SET title = ?, performed_on = ?, notes = ?, creatine_taken = ?,
+                        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE id = ?
+                    """,
+                    (
+                        update.title if update.title is not None else existing["title"],
+                        performed_on,
+                        update.notes if update.notes is not None else existing["notes"],
+                        int(update.creatine_taken)
+                        if update.creatine_taken is not None
+                        else existing["creatine_taken"],
+                        workout_id,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise WorkoutDateConflictError from error
+            return self._load(connection, workout_id)
+
+    def delete(self, workout_id: int) -> bool:
+        with self.database.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM fitness_workouts WHERE id = ?", (workout_id,)
+            )
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def _date_is_taken(
+        connection: sqlite3.Connection,
+        performed_on: str,
+        excluding_id: int | None = None,
+    ) -> bool:
+        if excluding_id is None:
+            row = connection.execute(
+                "SELECT 1 FROM fitness_workouts WHERE performed_on = ? LIMIT 1",
+                (performed_on,),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT 1 FROM fitness_workouts
+                WHERE performed_on = ? AND id != ?
+                LIMIT 1
+                """,
+                (performed_on, excluding_id),
+            ).fetchone()
+        return row is not None
 
     @staticmethod
     def _load(connection: sqlite3.Connection, workout_id: int) -> dict[str, object]:
@@ -104,6 +190,7 @@ class WorkoutRepository:
             "title": workout["title"],
             "performed_on": workout["performed_on"],
             "notes": workout["notes"],
+            "creatine_taken": bool(workout["creatine_taken"]),
             "created_at": workout["created_at"],
             "updated_at": workout["updated_at"],
             "exercises": exercises,

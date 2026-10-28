@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import Database
 from app.modules.fitness.repository import WorkoutRepository
 from app.modules.fitness.router import router as fitness_router
+from app.modules.nutrition.repository import NutritionRepository
+from app.modules.nutrition.router import router as nutrition_router
 from app.modules.planner.repository import TaskRepository
 from app.modules.planner.router import router as planner_router
 
@@ -25,11 +27,12 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         database.initialize()
         app.state.task_repository = TaskRepository(database)
         app.state.workout_repository = WorkoutRepository(database)
+        app.state.nutrition_repository = NutritionRepository(database)
         yield
 
     app = FastAPI(
         title="Personal OS API",
-        version="0.3.0",
+        version="0.4.0",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -46,6 +49,7 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     app.include_router(planner_router)
     app.include_router(fitness_router)
+    app.include_router(nutrition_router)
     return app
 
 

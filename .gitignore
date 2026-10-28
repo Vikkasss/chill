@@ -6,7 +6,6 @@
 !.env.example
 LOCAL_ACCESS.md
 AGENTS.md
-backlog.md
 .venv/
 __pycache__/
 .pytest_cache/

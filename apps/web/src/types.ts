@@ -5,6 +5,7 @@ export type Task = {
   title: string;
   due_date: string;
   priority: TaskPriority;
+  base_priority: TaskPriority;
   completed: boolean;
   created_at: string;
   updated_at: string;
@@ -29,9 +30,14 @@ export type WorkoutExerciseDraft = {
 export type WorkoutDraft = {
   title: string;
   performed_on: string;
-  notes: string;
-  exercises: WorkoutExerciseDraft[];
+  creatine_taken: boolean;
+  notes?: string;
+  exercises?: WorkoutExerciseDraft[];
 };
+
+export type WorkoutUpdate = Partial<
+  Pick<WorkoutDraft, "title" | "performed_on" | "notes" | "creatine_taken">
+>;
 
 export type WorkoutSet = WorkoutSetDraft & {
   id: number;
@@ -50,8 +56,36 @@ export type Workout = {
   title: string;
   performed_on: string;
   notes: string;
+  creatine_taken: boolean;
   created_at: string;
   updated_at: string;
   exercises: WorkoutExercise[];
+};
+
+export type NutritionGoals = {
+  protein_goal: number;
+  calorie_goal: number;
+};
+
+export type NutritionEntry = {
+  id: number;
+  consumed_on: string;
+  protein_g: number;
+  calories: number;
+  created_at: string;
+};
+
+export type NutritionEntryDraft = Omit<NutritionEntry, "id" | "created_at">;
+
+export type NutritionEntryUpdate = Pick<NutritionEntry, "protein_g" | "calories">;
+
+export type NutritionDay = {
+  date: string;
+  goals: NutritionGoals;
+  totals: {
+    protein_g: number;
+    calories: number;
+  };
+  entries: NutritionEntry[];
 };
 

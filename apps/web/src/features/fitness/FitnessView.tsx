@@ -1,23 +1,45 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { createWorkout, listWorkouts } from "../../api";
-import type { Workout, WorkoutExerciseDraft, WorkoutSetDraft } from "../../types";
+import { createWorkout, deleteWorkout, listWorkouts, updateWorkout } from "../../api";
+import type { Workout } from "../../types";
 import { localDate, readableDate } from "../../utils/date";
 
-function emptySet(): WorkoutSetDraft {
-  return { weight_kg: 0, reps: 10 };
+const weekdayLabels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
+function parseDate(value: string) {
+  return new Date(`${value}T12:00:00`);
 }
 
-function emptyExercise(): WorkoutExerciseDraft {
-  return { name: "", sets: [emptySet()] };
+function dateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function monthStart(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), 1, 12);
+}
+
+function calendarDays(anchor: Date) {
+  const first = monthStart(anchor);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - mondayOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(start);
+    day.setDate(start.getDate() + index);
+    return day;
+  });
 }
 
 export default function FitnessView() {
   const [workouts, setWorkouts] = useState<Workout[]>([]);
-  const [title, setTitle] = useState("");
-  const [performedOn, setPerformedOn] = useState(localDate);
-  const [notes, setNotes] = useState("");
-  const [exercises, setExercises] = useState<WorkoutExerciseDraft[]>([emptyExercise()]);
+  const [visibleMonth, setVisibleMonth] = useState(() => monthStart(parseDate(localDate())));
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [editingWorkoutId, setEditingWorkoutId] = useState<number | null>(null);
+  const [focus, setFocus] = useState("");
+  const [creatineTaken, setCreatineTaken] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,88 +60,98 @@ export default function FitnessView() {
     void loadWorkouts();
   }, [loadWorkouts]);
 
-  function updateExerciseName(exerciseIndex: number, name: string) {
-    setExercises((current) =>
-      current.map((exercise, index) =>
-        index === exerciseIndex ? { ...exercise, name } : exercise,
-      ),
-    );
+  const days = useMemo(() => calendarDays(visibleMonth), [visibleMonth]);
+  const workoutByDate = useMemo(() => {
+    const mappedWorkouts = new Map<string, Workout>();
+    workouts.forEach((workout) => {
+      if (!mappedWorkouts.has(workout.performed_on)) {
+        mappedWorkouts.set(workout.performed_on, workout);
+      }
+    });
+    return mappedWorkouts;
+  }, [workouts]);
+  const workoutStatusByDate = useMemo(() => {
+    const statuses = new Map<string, { count: number; creatineTaken: boolean }>();
+    workouts.forEach((workout) => {
+      const current = statuses.get(workout.performed_on) ?? {
+        count: 0,
+        creatineTaken: false,
+      };
+      statuses.set(workout.performed_on, {
+        count: current.count + 1,
+        creatineTaken: current.creatineTaken || workout.creatine_taken,
+      });
+    });
+    return statuses;
+  }, [workouts]);
+
+  const monthTitle = new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric",
+  }).format(visibleMonth);
+
+  function shiftMonth(offset: number) {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1, 12));
   }
 
-  function updateSet(
-    exerciseIndex: number,
-    setIndex: number,
-    field: keyof WorkoutSetDraft,
-    value: number,
-  ) {
-    setExercises((current) =>
-      current.map((exercise, index) =>
-        index === exerciseIndex
-          ? {
-              ...exercise,
-              sets: exercise.sets.map((workoutSet, currentSetIndex) =>
-                currentSetIndex === setIndex
-                  ? { ...workoutSet, [field]: value }
-                  : workoutSet,
-              ),
-            }
-          : exercise,
-      ),
-    );
+  function openWorkout(date: Date, workout = workoutByDate.get(dateKey(date))) {
+    const key = dateKey(date);
+    setSelectedDate(key);
+    setEditingWorkoutId(workout?.id ?? null);
+    setFocus(workout?.title ?? "");
+    setCreatineTaken(workout?.creatine_taken ?? false);
+    if (date.getMonth() !== visibleMonth.getMonth()) {
+      setVisibleMonth(monthStart(date));
+    }
   }
 
-  function addSet(exerciseIndex: number) {
-    setExercises((current) =>
-      current.map((exercise, index) =>
-        index === exerciseIndex
-          ? {
-              ...exercise,
-              sets: [
-                ...exercise.sets,
-                { ...(exercise.sets.at(-1) ?? emptySet()) },
-              ],
-            }
-          : exercise,
-      ),
-    );
-  }
-
-  function removeSet(exerciseIndex: number, setIndex: number) {
-    setExercises((current) =>
-      current.map((exercise, index) =>
-        index === exerciseIndex
-          ? { ...exercise, sets: exercise.sets.filter((_, itemIndex) => itemIndex !== setIndex) }
-          : exercise,
-      ),
-    );
-  }
-
-  function removeExercise(exerciseIndex: number) {
-    setExercises((current) => current.filter((_, index) => index !== exerciseIndex));
+  function closeWorkout() {
+    setSelectedDate(null);
+    setEditingWorkoutId(null);
+    setFocus("");
+    setCreatineTaken(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!title.trim() || exercises.some((exercise) => !exercise.name.trim())) return;
+    if (!selectedDate || !focus.trim()) return;
 
     setSaving(true);
     setError(null);
     try {
-      await createWorkout({
-        title: title.trim(),
-        performed_on: performedOn,
-        notes: notes.trim(),
-        exercises: exercises.map((exercise) => ({
-          ...exercise,
-          name: exercise.name.trim(),
-        })),
-      });
-      setTitle("");
-      setNotes("");
-      setExercises([emptyExercise()]);
+      if (editingWorkoutId === null) {
+        await createWorkout({
+          title: focus.trim(),
+          performed_on: selectedDate,
+          creatine_taken: creatineTaken,
+        });
+      } else {
+        await updateWorkout(editingWorkoutId, {
+          title: focus.trim(),
+          creatine_taken: creatineTaken,
+        });
+      }
+      closeWorkout();
       await loadWorkouts();
     } catch {
-      setError("Не удалось сохранить тренировку. Проверьте упражнения и подходы.");
+      setError("Не удалось сохранить тренировку. На одну дату можно добавить только одну запись.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeWorkout() {
+    if (editingWorkoutId === null) return;
+    if (!window.confirm("Удалить эту тренировку?")) return;
+
+    setSaving(true);
+    setError(null);
+    try {
+      await deleteWorkout(editingWorkoutId);
+      closeWorkout();
+      await loadWorkouts();
+    } catch {
+      setError("Не удалось удалить тренировку.");
     } finally {
       setSaving(false);
     }
@@ -129,8 +161,8 @@ export default function FitnessView() {
     <>
       <header className="topbar">
         <div>
-          <p className="eyebrow">Fitness · v0.3</p>
-          <h1>Тренировки</h1>
+          <p className="eyebrow">Тренировки · v0.4</p>
+          <h1>Календарь движения</h1>
         </div>
         <div className="progress-pill">
           <strong>{workouts.length}</strong>
@@ -138,136 +170,45 @@ export default function FitnessView() {
         </div>
       </header>
 
-      <div className="fitness-layout">
-        <section className="planner-card workout-builder">
-          <div className="section-heading">
+      <div className="fitness-layout calendar-layout">
+        <section className="surface-card calendar-card">
+          <header className="calendar-header">
+            <button aria-label="Предыдущий месяц" type="button" onClick={() => shiftMonth(-1)}>‹</button>
             <div>
-              <p className="eyebrow">Новая запись</p>
-              <h2>Добавить тренировку</h2>
+              <span>Календарь</span>
+              <h2>{monthTitle}</h2>
             </div>
+            <button aria-label="Следующий месяц" type="button" onClick={() => shiftMonth(1)}>›</button>
+          </header>
+
+          <div className="calendar-weekdays" aria-hidden="true">
+            {weekdayLabels.map((day) => <span key={day}>{day}</span>)}
           </div>
-
-          <form className="workout-form" onSubmit={handleSubmit}>
-            <div className="workout-meta-grid">
-              <label>
-                <span>Название</span>
-                <input
-                  maxLength={160}
-                  placeholder="Например, ноги и корпус"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                />
-              </label>
-              <label>
-                <span>Дата</span>
-                <input
-                  type="date"
-                  value={performedOn}
-                  onChange={(event) => setPerformedOn(event.target.value)}
-                />
-              </label>
-            </div>
-
-            <label>
-              <span>Заметка</span>
-              <textarea
-                maxLength={2000}
-                placeholder="Самочувствие, цель или комментарий"
-                rows={2}
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-              />
-            </label>
-
-            <div className="exercise-list">
-              {exercises.map((exercise, exerciseIndex) => (
-                <div className="exercise-editor" key={exerciseIndex}>
-                  <div className="exercise-header">
-                    <strong>Упражнение {exerciseIndex + 1}</strong>
-                    {exercises.length > 1 && (
-                      <button
-                        className="danger-link"
-                        type="button"
-                        onClick={() => removeExercise(exerciseIndex)}
-                      >
-                        Удалить
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    aria-label={`Название упражнения ${exerciseIndex + 1}`}
-                    maxLength={160}
-                    placeholder="Название упражнения"
-                    value={exercise.name}
-                    onChange={(event) => updateExerciseName(exerciseIndex, event.target.value)}
-                  />
-
-                  <div className="set-list">
-                    {exercise.sets.map((workoutSet, setIndex) => (
-                      <div className="set-row" key={setIndex}>
-                        <span className="set-number">{setIndex + 1}</span>
-                        <label>
-                          <span>Вес, кг</span>
-                          <input
-                            min="0"
-                            max="1000"
-                            step="0.5"
-                            type="number"
-                            value={workoutSet.weight_kg}
-                            onChange={(event) =>
-                              updateSet(exerciseIndex, setIndex, "weight_kg", Number(event.target.value))
-                            }
-                          />
-                        </label>
-                        <label>
-                          <span>Повторы</span>
-                          <input
-                            min="1"
-                            max="1000"
-                            type="number"
-                            value={workoutSet.reps}
-                            onChange={(event) =>
-                              updateSet(exerciseIndex, setIndex, "reps", Number(event.target.value))
-                            }
-                          />
-                        </label>
-                        {exercise.sets.length > 1 && (
-                          <button
-                            aria-label={`Удалить подход ${setIndex + 1}`}
-                            className="remove-set"
-                            type="button"
-                            onClick={() => removeSet(exerciseIndex, setIndex)}
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <button className="text-button" type="button" onClick={() => addSet(exerciseIndex)}>
-                    + Подход
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="builder-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setExercises((current) => [...current, emptyExercise()])}
-              >
-                + Упражнение
-              </button>
-              <button
-                className="add-button compact"
-                type="submit"
-                disabled={saving || !title.trim()}
-              >
-                {saving ? "Сохраняю…" : "Сохранить тренировку"}
-              </button>
-            </div>
-          </form>
+          <div className="calendar-grid">
+            {days.map((day) => {
+              const key = dateKey(day);
+              const status = workoutStatusByDate.get(key);
+              const count = status?.count ?? 0;
+              const outsideMonth = day.getMonth() !== visibleMonth.getMonth();
+              return (
+                <button
+                  aria-label={`${readableDate(key)}${count ? `, тренировок: ${count}` : ""}${status?.creatineTaken ? ", креатин принят" : ""}`}
+                  className={`${outsideMonth ? "outside-month" : ""} ${count ? "has-workout" : ""} ${status?.creatineTaken ? "has-creatine" : ""} ${key === localDate() ? "today" : ""}`}
+                  key={key}
+                  type="button"
+                  onClick={() => openWorkout(day)}
+                >
+                  <span className="calendar-day-number">{day.getDate()}</span>
+                  {status?.creatineTaken && <span aria-hidden="true" className="calendar-creatine-mark" />}
+                  <small>{count > 1 ? count : ""}</small>
+                </button>
+              );
+            })}
+          </div>
+          <p className="calendar-hint">
+            <span><i className="workout-legend-mark" />Тренировка</span>
+            <span><i className="creatine-legend-mark" />Креатин</span>
+          </p>
         </section>
 
         <section className="workout-history">
@@ -292,36 +233,81 @@ export default function FitnessView() {
           ) : (
             <div className="history-list">
               {workouts.map((workout) => (
-                <article className="workout-card" key={workout.id}>
-                  <header>
-                    <div>
-                      <h3>{workout.title}</h3>
-                      <p>{readableDate(workout.performed_on)}</p>
-                    </div>
-                    <span>{workout.exercises.length} упр.</span>
-                  </header>
-                  {workout.notes && <p className="workout-notes">{workout.notes}</p>}
-                  <div className="history-exercises">
-                    {workout.exercises.map((exercise) => (
-                      <div className="history-exercise" key={exercise.id}>
-                        <strong>{exercise.name}</strong>
-                        <div className="set-chips">
-                          {exercise.sets.map((workoutSet) => (
-                            <span key={workoutSet.id}>
-                              {workoutSet.weight_kg > 0 ? `${workoutSet.weight_kg} кг` : "без веса"}
-                              {" × "}{workoutSet.reps}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                <button
+                  className={`workout-card ${workout.creatine_taken ? "creatine-recorded" : ""}`}
+                  key={workout.id}
+                  type="button"
+                  onClick={() => openWorkout(parseDate(workout.performed_on), workout)}
+                >
+                  <div className="workout-date-badge">
+                    <strong>{parseDate(workout.performed_on).getDate()}</strong>
+                    <span>{new Intl.DateTimeFormat("ru-RU", { month: "short" }).format(parseDate(workout.performed_on))}</span>
                   </div>
-                </article>
+                  <div>
+                    <h3>{workout.title}</h3>
+                    <p>{readableDate(workout.performed_on)}</p>
+                    {workout.creatine_taken && <span className="creatine-badge">✓ Креатин</span>}
+                    {workout.exercises.length > 0 && <small>Сохранено упражнений: {workout.exercises.length}</small>}
+                  </div>
+                  {workout.creatine_taken && <span aria-hidden="true" className="workout-creatine-strip" />}
+                </button>
               ))}
             </div>
           )}
         </section>
       </div>
+
+      {selectedDate && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => !saving && closeWorkout()}>
+          <section
+            aria-labelledby="workout-dialog-title"
+            aria-modal="true"
+            className="modal-card"
+            role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-icon fitness-modal-icon">◇</div>
+            <p className="eyebrow">{readableDate(selectedDate)}</p>
+            <h2 id="workout-dialog-title">
+              {editingWorkoutId === null ? "Добавить тренировку" : "Редактировать тренировку"}
+            </h2>
+            <form onSubmit={handleSubmit}>
+              <label>
+                <span>На что был упор?</span>
+                <textarea
+                  autoFocus
+                  maxLength={160}
+                  placeholder="Например, растяжка и спина"
+                  rows={4}
+                  value={focus}
+                  onChange={(event) => setFocus(event.target.value)}
+                />
+              </label>
+              <label className="creatine-checkbox">
+                <input
+                  checked={creatineTaken}
+                  type="checkbox"
+                  onChange={(event) => setCreatineTaken(event.target.checked)}
+                />
+                <span aria-hidden="true" className="creatine-checkbox-mark">✓</span>
+                <span>
+                  <strong>Креатин принят</strong>
+                  <small>Отметим зелёной полоской в календаре и истории</small>
+                </span>
+              </label>
+              <div className="form-actions modal-actions">
+                {editingWorkoutId !== null && (
+                  <button className="danger-button" type="button" disabled={saving} onClick={() => void removeWorkout()}>Удалить</button>
+                )}
+                <button className="secondary-button" type="button" disabled={saving} onClick={closeWorkout}>Отмена</button>
+                <button className="primary-button compact" type="submit" disabled={saving || !focus.trim()}>
+                  {saving ? "Сохраняю…" : editingWorkoutId === null ? "Добавить" : "Сохранить"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </>
   );
 }

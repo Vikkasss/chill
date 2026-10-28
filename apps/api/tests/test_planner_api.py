@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -22,6 +22,7 @@ def test_task_lifecycle(tmp_path) -> None:
         task = created.json()
         assert task["title"] == "Подготовить план недели"
         assert task["completed"] is False
+        assert task["base_priority"] == "high"
 
         listed = client.get("/api/tasks", params={"date": date.today().isoformat()})
         assert listed.status_code == 200
@@ -40,7 +41,8 @@ def test_task_lifecycle(tmp_path) -> None:
         )
         assert edited.status_code == 200
         assert edited.json()["title"] == "Обновлённая задача"
-        assert edited.json()["priority"] == "low"
+        assert edited.json()["base_priority"] == "low"
+        assert edited.json()["priority"] == "high"
 
         filtered = client.get("/api/tasks", params={"completed": True})
         assert filtered.status_code == 200
@@ -61,6 +63,33 @@ def test_missing_task_returns_404(tmp_path) -> None:
         )
 
     assert response.status_code == 404
+
+
+def test_priority_increases_as_deadline_approaches(tmp_path) -> None:
+    app = create_app(tmp_path / "test.db")
+    today = date.today()
+
+    with TestClient(app) as client:
+        scenarios = [
+            ("Далёкая", today + timedelta(days=10), "low", "low"),
+            ("Скоро", today + timedelta(days=4), "low", "medium"),
+            ("Срочно", today + timedelta(days=2), "low", "high"),
+            ("Минимум средний", today + timedelta(days=10), "medium", "medium"),
+            ("Высокий вручную", today + timedelta(days=30), "high", "high"),
+        ]
+
+        for title, deadline, base_priority, expected_priority in scenarios:
+            response = client.post(
+                "/api/tasks",
+                json={
+                    "title": title,
+                    "due_date": deadline.isoformat(),
+                    "priority": base_priority,
+                },
+            )
+            assert response.status_code == 201
+            assert response.json()["base_priority"] == base_priority
+            assert response.json()["priority"] == expected_priority
 
 
 def test_database_path_can_be_configured_with_environment(monkeypatch, tmp_path) -> None:

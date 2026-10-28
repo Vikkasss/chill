@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS fitness_workouts (
     title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 160),
     performed_on TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '',
+    creatine_taken INTEGER NOT NULL DEFAULT 0 CHECK(creatine_taken IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -48,6 +49,28 @@ CREATE TABLE IF NOT EXISTS fitness_sets (
     reps INTEGER NOT NULL CHECK(reps >= 1),
     UNIQUE(exercise_id, set_number)
 );
+
+CREATE TABLE IF NOT EXISTS nutrition_settings (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    protein_goal REAL NOT NULL DEFAULT 95 CHECK(protein_goal > 0),
+    calorie_goal INTEGER NOT NULL DEFAULT 1850 CHECK(calorie_goal > 0),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+INSERT OR IGNORE INTO nutrition_settings (id, protein_goal, calorie_goal)
+VALUES (1, 95, 1850);
+
+CREATE TABLE IF NOT EXISTS nutrition_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    consumed_on TEXT NOT NULL,
+    protein_g REAL NOT NULL DEFAULT 0 CHECK(protein_g >= 0),
+    calories INTEGER NOT NULL DEFAULT 0 CHECK(calories >= 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK(protein_g > 0 OR calories > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nutrition_entries_consumed_on
+ON nutrition_entries(consumed_on);
 """
 
 
@@ -59,6 +82,34 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            workout_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(fitness_workouts)").fetchall()
+            }
+            if "creatine_taken" not in workout_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE fitness_workouts
+                    ADD COLUMN creatine_taken INTEGER NOT NULL DEFAULT 0
+                    CHECK(creatine_taken IN (0, 1))
+                    """
+                )
+            duplicate_workout_date = connection.execute(
+                """
+                SELECT performed_on
+                FROM fitness_workouts
+                GROUP BY performed_on
+                HAVING COUNT(*) > 1
+                LIMIT 1
+                """
+            ).fetchone()
+            if duplicate_workout_date is None:
+                connection.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fitness_workouts_unique_date
+                    ON fitness_workouts(performed_on)
+                    """
+                )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

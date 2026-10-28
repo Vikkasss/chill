@@ -1,12 +1,12 @@
 {
   "name": "Personal OS",
   "short_name": "Personal OS",
-  "description": "Личный планировщик и журнал тренировок",
+  "description": "Личный планировщик, календарь тренировок и дневник питания",
   "lang": "ru",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3f0e8",
-  "theme_color": "#f3f0e8",
+  "background_color": "#fff6f7",
+  "theme_color": "#fff6f7",
   "icons": [
     {
       "src": "/icons/icon.svg",

@@ -6,6 +6,7 @@ services:
       context: ./apps/api
     environment:
       PERSONAL_OS_DB_PATH: /data/personal_os.db
+      PERSONAL_OS_TIMEZONE: Europe/Moscow
     volumes:
       - ./data:/data
     healthcheck:
